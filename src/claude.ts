@@ -1,4 +1,4 @@
-import type { Env, PaperSummary, RawPaper } from "./types";
+import type { Env, RawPaper } from "./types";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -49,86 +49,65 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 async function validateGroundedness(
   env: Env,
-  summary: string,
-  abstract: string,
+  synthesis: string,
+  sourceText: string,
 ): Promise<number> {
   const THRESHOLD = 0.75;
 
-  const summarySentences = splitSentences(summary);
-  const abstractSentences = splitSentences(abstract);
+  const synthesisSentences = splitSentences(synthesis);
+  const sourceSentences = splitSentences(sourceText);
 
-  if (summarySentences.length === 0 || abstractSentences.length === 0) return 0;
+  if (synthesisSentences.length === 0 || sourceSentences.length === 0) return 0;
 
   const result = await env.AI.run("@cf/baai/bge-small-en-v1.5", {
-    text: [...summarySentences, ...abstractSentences],
+    text: [...synthesisSentences, ...sourceSentences],
   });
 
   if (!("data" in result) || result.data == null) return 0;
 
   const embeddings = result.data;
-  const summaryEmbeddings = embeddings.slice(0, summarySentences.length);
-  const abstractEmbeddings = embeddings.slice(summarySentences.length);
+  const synthesisEmbeddings = embeddings.slice(0, synthesisSentences.length);
+  const sourceEmbeddings = embeddings.slice(synthesisSentences.length);
 
   let groundedCount = 0;
-  for (const claimVec of summaryEmbeddings) {
+  for (const claimVec of synthesisEmbeddings) {
     const bestSim = Math.max(
-      ...abstractEmbeddings.map((absVec) => cosineSimilarity(claimVec, absVec)),
+      ...sourceEmbeddings.map((srcVec) => cosineSimilarity(claimVec, srcVec)),
     );
     if (bestSim >= THRESHOLD) groundedCount++;
   }
 
-  return groundedCount / summarySentences.length;
+  return groundedCount / synthesisSentences.length;
 }
 
-export async function summariseAndValidate(
+export async function synthesise(
   env: Env,
-  paper: RawPaper,
-): Promise<PaperSummary> {
-  const abstract = paper.abstract ?? "No abstract available.";
+  papers: RawPaper[],
+  previousSyntheses: string[],
+  query: string,
+): Promise<{ synthesis: string; groundedness: number }> {
+  const paperList = papers
+    .map((p, i) => `[${i + 1}] ${p.title}\n${p.abstract}`)
+    .join("\n\n");
 
-  const prompt = `Here is an academic paper abstract:
+  const historySection =
+    previousSyntheses.length > 0
+      ? `\n\nPrevious findings in this session:\n${previousSyntheses.map((s) => `- ${s}`).join("\n")}`
+      : "";
 
-<abstract>
-${abstract}
-</abstract>
+  const prompt = `You are synthesising academic research. Based on the papers below, write a single coherent paragraph (4-6 sentences) capturing the key findings relevant to: "${query}".
 
-Write a 3-sentence summary of this paper. Be precise and factual. Respond with the summary text only.`;
+Use inline citations like [1], [2]. Be precise and factual. Only cite claims supported by the abstracts provided.${historySection}
 
-  const summary = await callClaude(env, prompt);
-  const groundedness = await validateGroundedness(env, summary, abstract);
+Papers:
+${paperList}
 
-  return {
-    paper_id: paper.paperId,
-    title: paper.title,
-    summary,
-    groundedness,
-  };
-}
+Write the synthesis paragraph only, no preamble.`;
 
-export async function suggestNextQueries(
-  env: Env,
-  summaries: PaperSummary[],
-  originalQuery: string,
-): Promise<string[]> {
-  const summaryText = summaries
-    .map((s) => `- ${s.title}: ${s.summary}`)
-    .join("\n");
+  const synthesis = await callClaude(env, prompt);
 
-  const prompt = `I'm researching: "${originalQuery}"
+  const allAbstracts = papers.map((p) => p.abstract ?? "").join(" ");
+  const groundedness = await validateGroundedness(env, synthesis, allAbstracts);
 
-I've found these papers so far:
-${summaryText}
-
-Suggest 2 follow-up search queries that would deepen this research into unexplored areas.
-Respond with valid JSON only: {"queries": ["query 1", "query 2"]}`;
-
-  const raw = await callClaude(env, prompt);
-
-  try {
-    const cleaned = raw.replace(/```(?:json)?\n?/g, "").trim();
-    const parsed = JSON.parse(cleaned) as { queries: string[] };
-    return parsed.queries.slice(0, 2);
-  } catch {
-    return [];
-  }
+  return { synthesis, groundedness };
 }

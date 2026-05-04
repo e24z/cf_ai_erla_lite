@@ -9,19 +9,19 @@ export interface ResearchRequest {
   session_id?: string;
 }
 
-export interface PaperSummary {
-  paper_id: string;
+export interface PaperSource {
+  index: number;
   title: string;
-  summary: string;
-  groundedness: number;
+  arxiv_id: string;
 }
 
 export interface ResearchResponse {
   session_id: string;
-  summaries: PaperSummary[];
-  next_queries: string[];
-  papers_processed: number;
+  synthesis: string;
+  groundedness: number;
+  papers_used: number;
   total_this_session: number;
+  sources: PaperSource[];
 }
 
 export interface RawPaper {
