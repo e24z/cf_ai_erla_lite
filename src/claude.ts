@@ -54,7 +54,8 @@ If all claims are supported, use an empty array for unsupported.`;
 
   let parsed: { summary: string; unsupported: string[] };
   try {
-    parsed = JSON.parse(raw);
+    const cleaned = raw.replace(/```(?:json)?\n?/g, "").trim();
+    parsed = JSON.parse(cleaned);
   } catch {
     parsed = { summary: raw, unsupported: [] };
   }
@@ -93,7 +94,8 @@ Respond with valid JSON only: {"queries": ["query 1", "query 2"]}`;
   const raw = await callClaude(env, prompt);
 
   try {
-    const parsed = JSON.parse(raw) as { queries: string[] };
+    const cleaned = raw.replace(/```(?:json)?\n?/g, "").trim();
+    const parsed = JSON.parse(cleaned) as { queries: string[] };
     return parsed.queries.slice(0, 2);
   } catch {
     return [];

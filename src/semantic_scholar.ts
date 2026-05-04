@@ -1,29 +1,54 @@
-import type { Env, RawPaper } from "./types";
+import type { RawPaper } from "./types";
 
-const BASE_URL = "https://api.semanticscholar.org/graph/v1";
-const FIELDS = "paperId,title,abstract,year,citationCount";
+const BASE_URL = "https://api.openalex.org/works";
+
+interface OpenAlexWork {
+  id: string;
+  title: string;
+  abstract_inverted_index: Record<string, number[]> | null;
+  publication_year: number | null;
+  cited_by_count: number | null;
+}
+
+function reconstructAbstract(
+  index: Record<string, number[]> | null,
+): string | null {
+  if (!index) return null;
+  const pairs: [string, number][] = [];
+  for (const [word, positions] of Object.entries(index)) {
+    for (const pos of positions) pairs.push([word, pos]);
+  }
+  pairs.sort((a, b) => a[1] - b[1]);
+  return pairs.map(([word]) => word).join(" ");
+}
 
 export async function searchPapers(
-  env: Env,
+  _env: unknown,
   query: string,
   limit = 5,
 ): Promise<RawPaper[]> {
   const params = new URLSearchParams({
-    query,
-    fields: FIELDS,
-    limit: String(limit),
+    search: query,
+    "per-page": String(limit),
+    select: "id,title,abstract_inverted_index,publication_year,cited_by_count",
+    mailto: "research-demo@example.com",
   });
 
-  const res = await fetch(`${BASE_URL}/paper/search?${params}`, {
-    headers: env.SEMANTIC_SCHOLAR_API_KEY
-      ? { "x-api-key": env.SEMANTIC_SCHOLAR_API_KEY }
-      : {},
-  });
+  const res = await fetch(`${BASE_URL}?${params}`);
 
   if (!res.ok) {
-    throw new Error(`Semantic Scholar search failed: ${res.status}`);
+    throw new Error(`OpenAlex search failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as { data: RawPaper[] };
-  return (data.data ?? []).filter((p) => p.abstract);
+  const data = (await res.json()) as { results: OpenAlexWork[] };
+
+  return (data.results ?? [])
+    .map((w) => ({
+      paperId: w.id.replace("https://openalex.org/", ""),
+      title: w.title ?? "Unknown",
+      abstract: reconstructAbstract(w.abstract_inverted_index),
+      year: w.publication_year,
+      citationCount: w.cited_by_count,
+    }))
+    .filter((p) => p.abstract);
 }
