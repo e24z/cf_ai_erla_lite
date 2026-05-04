@@ -1,25 +1,29 @@
 import type { RawPaper } from "./types";
 
-const BASE_URL = "https://api.openalex.org/works";
+const BASE_URL = "https://export.arxiv.org/api/query";
 
-interface OpenAlexWork {
-  id: string;
-  title: string;
-  abstract_inverted_index: Record<string, number[]> | null;
-  publication_year: number | null;
-  cited_by_count: number | null;
+function extract(xml: string, tag: string): string | null {
+  const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
+  return match?.[1] ?? null;
 }
 
-function reconstructAbstract(
-  index: Record<string, number[]> | null,
-): string | null {
-  if (!index) return null;
-  const pairs: [string, number][] = [];
-  for (const [word, positions] of Object.entries(index)) {
-    for (const pos of positions) pairs.push([word, pos]);
-  }
-  pairs.sort((a, b) => a[1] - b[1]);
-  return pairs.map(([word]) => word).join(" ");
+function parseAtomFeed(xml: string): RawPaper[] {
+  const entries = xml.split("<entry>").slice(1);
+
+  return entries
+    .map((entry) => {
+      const rawId = extract(entry, "id") ?? "";
+      const paperId = rawId.split("/abs/").pop() ?? rawId;
+      const title = (extract(entry, "title") ?? "Unknown")
+        .replace(/\s+/g, " ")
+        .trim();
+      const abstract = (extract(entry, "summary") ?? "")
+        .replace(/\s+/g, " ")
+        .trim() || null;
+
+      return { paperId, title, abstract, year: null, citationCount: null };
+    })
+    .filter((p) => p.abstract);
 }
 
 export async function searchPapers(
@@ -28,32 +32,19 @@ export async function searchPapers(
   limit = 5,
 ): Promise<RawPaper[]> {
   const params = new URLSearchParams({
-    search: query,
-    "per-page": String(limit),
-    select: "id,title,abstract_inverted_index,publication_year,cited_by_count",
-    mailto: "research-demo@example.com",
+    search_query: `all:${query}`,
+    start: "0",
+    max_results: String(limit),
   });
 
-  let res: Response | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
-    res = await fetch(`${BASE_URL}?${params}`);
-    if (res.status !== 429) break;
+  const res = await fetch(`${BASE_URL}?${params}`, {
+    headers: { "User-Agent": "cf-ai-erla-lite/0.1 (research demo)" },
+  });
+
+  if (!res.ok) {
+    throw new Error(`arXiv search failed: ${res.status}`);
   }
 
-  if (!res || !res.ok) {
-    throw new Error(`OpenAlex search failed: ${res?.status ?? "no response"}`);
-  }
-
-  const data = (await res.json()) as { results: OpenAlexWork[] };
-
-  return (data.results ?? [])
-    .map((w) => ({
-      paperId: w.id.replace("https://openalex.org/", ""),
-      title: w.title ?? "Unknown",
-      abstract: reconstructAbstract(w.abstract_inverted_index),
-      year: w.publication_year,
-      citationCount: w.cited_by_count,
-    }))
-    .filter((p) => p.abstract);
+  const xml = await res.text();
+  return parseAtomFeed(xml);
 }
