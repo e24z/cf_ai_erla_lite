@@ -34,10 +34,15 @@ export async function searchPapers(
     mailto: "research-demo@example.com",
   });
 
-  const res = await fetch(`${BASE_URL}?${params}`);
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
+    res = await fetch(`${BASE_URL}?${params}`);
+    if (res.status !== 429) break;
+  }
 
-  if (!res.ok) {
-    throw new Error(`OpenAlex search failed: ${res.status}`);
+  if (!res || !res.ok) {
+    throw new Error(`OpenAlex search failed: ${res?.status ?? "no response"}`);
   }
 
   const data = (await res.json()) as { results: OpenAlexWork[] };
