@@ -1,5 +1,5 @@
 import type { Env, PaperSummary } from "./types";
-import { searchPapers } from "./semantic_scholar";
+import { searchPapers } from "./openalex";
 import { summariseAndValidate, suggestNextQueries } from "./claude";
 
 const GROUNDEDNESS_THRESHOLD = 0.6;

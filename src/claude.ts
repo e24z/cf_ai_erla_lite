@@ -1,12 +1,8 @@
 import type { Env, PaperSummary, RawPaper } from "./types";
 
-const ANTHROPIC_API_URL =
-  "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
-async function callClaude(
-  env: Env,
-  prompt: string,
-): Promise<string> {
+async function callClaude(env: Env, prompt: string): Promise<string> {
   const res = await fetch(ANTHROPIC_API_URL, {
     method: "POST",
     headers: {
@@ -31,6 +27,59 @@ async function callClaude(
   return data.content[0]?.text ?? "";
 }
 
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+(?=[A-Z])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+async function validateGroundedness(
+  env: Env,
+  summary: string,
+  abstract: string,
+): Promise<number> {
+  const THRESHOLD = 0.75;
+
+  const summarySentences = splitSentences(summary);
+  const abstractSentences = splitSentences(abstract);
+
+  if (summarySentences.length === 0 || abstractSentences.length === 0) return 0;
+
+  const result = await env.AI.run("@cf/baai/bge-small-en-v1.5", {
+    text: [...summarySentences, ...abstractSentences],
+  });
+
+  if (!("data" in result) || result.data == null) return 0;
+
+  const embeddings = result.data;
+  const summaryEmbeddings = embeddings.slice(0, summarySentences.length);
+  const abstractEmbeddings = embeddings.slice(summarySentences.length);
+
+  let groundedCount = 0;
+  for (const claimVec of summaryEmbeddings) {
+    const bestSim = Math.max(
+      ...abstractEmbeddings.map((absVec) => cosineSimilarity(claimVec, absVec)),
+    );
+    if (bestSim >= THRESHOLD) groundedCount++;
+  }
+
+  return groundedCount / summarySentences.length;
+}
+
 export async function summariseAndValidate(
   env: Env,
   paper: RawPaper,
@@ -43,33 +92,15 @@ export async function summariseAndValidate(
 ${abstract}
 </abstract>
 
-1) Write a 3-sentence summary of this paper. Be precise and factual.
-2) List any claims in your summary that are NOT supported by the abstract above.
+Write a 3-sentence summary of this paper. Be precise and factual. Respond with the summary text only.`;
 
-Respond with valid JSON only, no other text:
-{"summary": "...", "unsupported": ["claim 1", "claim 2"]}
-If all claims are supported, use an empty array for unsupported.`;
-
-  const raw = await callClaude(env, prompt);
-
-  let parsed: { summary: string; unsupported: string[] };
-  try {
-    const cleaned = raw.replace(/```(?:json)?\n?/g, "").trim();
-    parsed = JSON.parse(cleaned);
-  } catch {
-    parsed = { summary: raw, unsupported: [] };
-  }
-
-  const sentenceCount = (parsed.summary.match(/[.!?]+/g) ?? []).length || 1;
-  const groundedness = Math.max(
-    0,
-    1 - parsed.unsupported.length / sentenceCount,
-  );
+  const summary = await callClaude(env, prompt);
+  const groundedness = await validateGroundedness(env, summary, abstract);
 
   return {
     paper_id: paper.paperId,
     title: paper.title,
-    summary: parsed.summary,
+    summary,
     groundedness,
   };
 }
