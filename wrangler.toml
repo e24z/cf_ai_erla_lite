@@ -5,4 +5,7 @@ compatibility_date = "2024-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "erla-lite-db"
-database_id = "placeholder-run-wrangler-d1-create-erla-lite-db"
+database_id = "ef226731-c9da-4890-9b99-ffc914932d45"
+
+[ai]
+binding = "AI"
